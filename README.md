@@ -15,7 +15,7 @@ Tested on an Intel iMac with macOS 13 and Resolve 19.1.4. Everything runs on the
 * **Reading frames:** the app reads frames straight from the original file, so nothing has to be rendered out of Resolve first.
 * **Flat footage:** the models get a contrast-stretched copy of each frame, which helps with log footage like D-Log. The matte itself always applies to the original.
 * **Saving:** the matte is written as a black-and-white PNG sequence at full resolution.
-* **In Resolve:** a Lua script starts the app and waits for it. Afterwards it imports the matte and adds a Fusion composition to the clip: `MediaIn` + `Loader` (matte) → `MatteControl` → `MediaOut`.
+* **In Resolve:** a Lua script starts the app and waits for it. Afterwards it adds a Fusion composition to the clip that reads the matte from disk: `MediaIn` + `Loader` (matte) → `MatteControl` → `MediaOut`.
 
 Speed on the test machine: about 0.55 s per frame, so a 20-second 4K clip takes around 5 minutes to track. See [benchmark/RESULTS.md](benchmark/RESULTS.md) for how the models were chosen.
 
@@ -48,7 +48,7 @@ The installer puts things in these places, and nothing else on the system is cha
 
 ## Usage
 
-1. On the **Edit** or **Cut** page, put the playhead over the clip you want to cut out.
+1. On the **Edit** or **Cut** page, put the playhead over the clip you want to cut out. If clips are stacked, Rotoscope uses the one on the topmost track. To use a clip further down, disable the tracks above it (the screen icon in the track header), or disable the clip on top with **D**.
 2. Choose **Workspace > Scripts > Rotoscope**. The Rotoscope window opens with the clip loaded.
 3. **Select the object** on a frame where it is clearly visible:
    * **Click** marks part of the object; **right-click** marks something that is not.
@@ -88,7 +88,7 @@ The matte is saved before anything happens in Resolve. Choose **Workspace > Scri
 
 The original clip is never changed. To remove the cut-out:
 * **The Fusion composition:** on the Fusion page, right-click the clip and delete the composition named "Rotoscope".
-* **The matte:** delete it from the "Rotoscope" bin in the media pool.
+* **The matte:** delete its folder in `~/Movies/Rotoscope/`. Don't do this while the composition still uses it.
 
 ## Where mattes are saved
 

@@ -35,7 +35,7 @@ def run(name, app_result=None, mode=None, **overrides):
     lua = lupa.LuaRuntime(unpack_returned_tuples=True)
     g = lua.globals()
     g.ROTOSCOPE_MODE = mode
-    g.MOCK = lua.table_from(mock)
+    g.MOCK = lua.table_from(mock, recursive=True)
     state = {"opened": 0, "alerts": []}
 
     def simulate_app():
@@ -83,7 +83,7 @@ if __name__ == "__main__":
     s, c = run("normal", done)
     assert s["active_is_cutout"]
     assert s["job"]["start_frame"] == 1500 and s["job"]["end_frame"] == 1999
-    assert any("ImportMedia" in x and "into Rotoscope" in x for x in c)
+    assert not any("ImportMedia" in x for x in c), "the media pool is not touched"
     assert any("RotoscopeCutout.Background <- MediaIn1" in x for x in c)
     assert any("RotoscopeCutout.Foreground <- Loader" in x for x in c)
     assert any("MediaOut1.Input <- MatteControl" in x for x in c)
@@ -91,15 +91,11 @@ if __name__ == "__main__":
     assert any("GlobalOut 499" in x for x in c)
 
     s, c = run("Resolve() is nil, global resolve exists (free version)", done, like_free_menu_script=True)
-    assert s["opened"] == 1 and any("ImportMedia" in x for x in c)
+    assert s["opened"] == 1 and s["active_is_cutout"]
 
     s, c = run("lists with __flags and {name = index} shapes", done, weird_lists=True,
-               like_free_menu_script=True, bin_exists=True)
-    assert any("ImportMedia" in x for x in c) and any("MediaOut1.Input <- MatteControl" in x for x in c)
-
-    s, c = run("only the *List() API: bin is created", done, weird_lists=True,
-               no_old_api=True, bin_exists=True, current_item=True)
-    assert any("ImportMedia" in x for x in c) and any("MediaOut1.Input <- MatteControl" in x for x in c)
+               like_free_menu_script=True)
+    assert any("MediaOut1.Input <- MatteControl" in x for x in c)
 
     s, c = run("trimmed clip: GetSourceStartFrame one frame early", done,
                src_start=131, src_span=363, duration=363, left_offset=132)
@@ -107,7 +103,7 @@ if __name__ == "__main__":
 
     s, c = run("apply last matte", None, mode="apply_last",
                weird_lists=True, like_free_menu_script=True, src_start=131, src_span=363, duration=363, left_offset=132)
-    assert s["opened"] == 0 and any("ImportMedia" in x for x in c) and any("RenameComp" in x for x in c)
+    assert s["opened"] == 0 and s["active_is_cutout"]
 
     s, c = run("exclusive end frame", done, src_span=500)
     assert s["opened"] == 1
@@ -142,8 +138,19 @@ if __name__ == "__main__":
                duplicate_names=True, src_start=0, src_span=131, duration=132)
     assert s["active_is_cutout"], "the composition the timeline renders must get the cut-out"
 
-    s, c = run("matte imported as a PNG sequence", done)
-    assert any("ImportMedia" in x and "_%06d.png [0-499]" in x for x in c), c
+    s, c = run("two stacked clips: the top one is used", done, v2={"name": "TOP.MP4"})
+    assert s["job"]["clip_name"] == "TOP.MP4"
+
+    s, c = run("two stacked clips, V2 track disabled: V1 is used", done, current_v2=True,
+               v2={"name": "TOP.MP4", "track_enabled": False})
+    assert s["job"]["clip_name"] == BASE["clip_name"], s["job"]["clip_name"]
+
+    s, c = run("two stacked clips, V2 clip disabled: V1 is used", done, current_v2=True,
+               v2={"name": "TOP.MP4", "clip_enabled": False})
+    assert s["job"]["clip_name"] == BASE["clip_name"]
+
+    s, c = run("track lists unreadable: falls back to the current clip", done, weird_lists=True, no_old_api=True)
+    assert s["opened"] == 1
 
     s, c = run("new clip gets a Rotoscope composition", done)
     assert any("AddFusionComp Composition 1" in x for x in c) and any("RenameComp Composition 1 Rotoscope true" in x for x in c)

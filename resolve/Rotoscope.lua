@@ -2,10 +2,11 @@
 Rotoscope for DaVinci Resolve 19 (free version)
 Workspace > Scripts > Rotoscope
 
-1. Finds the clip under the playhead.
+1. Takes the clip under the playhead on the topmost enabled video track
+   (disabled tracks and disabled clips are skipped).
 2. Starts the Rotoscope app with that clip and waits for it to close.
-3. If you pressed Done: imports the matte into the "Rotoscope" bin and adds a Fusion
-   composition to the clip: MediaIn + Loader (matte) -> MatteControl -> MediaOut,
+3. If you pressed Done: adds a Fusion composition to the clip that reads the matte
+   (a PNG sequence on disk): MediaIn + Loader (matte) -> MatteControl -> MediaOut,
    so everything outside the matte becomes transparent.
 
 Closing the app without pressing Done leaves the project untouched.
@@ -31,7 +32,6 @@ local JOB_LUA = JOBS_DIR .. "/job.lua"
 local RESULT_JSON = JOBS_DIR .. "/result.json"
 local RESULT_LUA = JOBS_DIR .. "/result.lua"
 local COMP_NAME = "Rotoscope"
-local BIN_NAME = "Rotoscope"
 local LOADER_NAME = "RotoscopeMatte"
 local MATTE_NAME = "RotoscopeCutout"
 local OUR_TOOLS = { [LOADER_NAME] = true, [MATTE_NAME] = true }
@@ -81,10 +81,6 @@ end
 
 local function sleep(sec)
     os.execute("sleep " .. tostring(sec))
-end
-
-local function starts_with(s, prefix)
-    return type(s) == "string" and s:sub(1, #prefix) == prefix
 end
 
 local function leading_number(s)
@@ -203,25 +199,41 @@ end
 
 -- ── finding the clip ─────────────────────────────────────────────────────────
 
+local function clip_enabled(item)
+    local ok, enabled = pcall(function() return item:GetClipEnabled() end)
+    return not ok or enabled ~= false
+end
+
+-- The clip under the playhead on the topmost enabled video track.
 local function find_item(timeline, fps)
     local playhead
     local now = tc_to_frames(timeline:GetCurrentTimecode(), fps)
     local start = tc_to_frames(timeline:GetStartTimecode(), fps)
     if now and start then playhead = timeline:GetStartFrame() + (now - start) end
+    if not playhead then return nil end
 
     local function under(item)
-        return item and playhead and item:GetStart() <= playhead and playhead < item:GetEnd()
+        return item:GetStart() <= playhead and playhead < item:GetEnd() and clip_enabled(item)
     end
 
-    local current = timeline:GetCurrentVideoItem()
-    if current and (playhead == nil or under(current)) then return current, playhead end
-    if playhead then
-        for track = timeline:GetTrackCount("video"), 1, -1 do
-            if timeline:GetIsTrackEnabled("video", track) then
-                for _, item in ipairs(track_items(timeline, track)) do
-                    if under(item) then return item, playhead end
+    for track = timeline:GetTrackCount("video"), 1, -1 do
+        if timeline:GetIsTrackEnabled("video", track) then
+            for _, item in ipairs(track_items(timeline, track)) do
+                if under(item) then
+                    log("clip on track V" .. track .. ":", item:GetName())
+                    return item, playhead
                 end
             end
+        end
+    end
+    -- Fallback in case the track lists can't be read: Resolve's current clip, if its track is enabled.
+    local current = timeline:GetCurrentVideoItem()
+    if current and under(current) then
+        local ok, ti = pcall(function() return current:GetTrackTypeAndIndex() end)
+        local track = ok and type(ti) == "table" and (ti[2] or ti["2"])
+        if not track or timeline:GetIsTrackEnabled("video", track) then
+            log("clip from the current video item:", current:GetName())
+            return current, playhead
         end
     end
     return nil, playhead
@@ -402,36 +414,6 @@ local function build_comp(item, res)
     return true
 end
 
--- ── media pool ───────────────────────────────────────────────────────────────
-
-local function import_matte(project, res)
-    local mp = project:GetMediaPool()
-    local root = mp:GetRootFolder()
-    local bin
-    for _, f in ipairs(objects(call_first(root, { "GetSubFolders", "GetSubFolderList" }))) do
-        local ok, name = pcall(function() return f:GetName() end)
-        if ok and name == BIN_NAME then bin = f end
-    end
-    bin = bin or mp:AddSubFolder(root, BIN_NAME)
-    if not bin then return false, "Could not create the " .. BIN_NAME .. " bin in the media pool." end
-
-    -- Remove an earlier import of the same matte.
-    for _, clip in ipairs(objects(call_first(bin, { "GetClips", "GetClipList" }))) do
-        local fp = clip:GetClipProperty("File Path")
-        if fp == res.matte or starts_with(fp, res.matte_dir .. "/") then mp:DeleteClips({ clip }) end
-    end
-
-    local previous = mp:GetCurrentFolder()
-    mp:SetCurrentFolder(bin)
-    local items = mp:ImportMedia({ { FilePath = res.matte_pattern, StartIndex = 0, EndIndex = res.frames - 1 } })
-    if type(items) ~= "table" or next(items) == nil then items = mp:ImportMedia({ res.matte_dir }) end
-    if previous then mp:SetCurrentFolder(previous) end
-    if type(items) ~= "table" or next(items) == nil then
-        log("matte not added to the media pool; the composition reads the files directly")
-    end
-    return true
-end
-
 -- ── main ─────────────────────────────────────────────────────────────────────
 
 local function get_resolve()
@@ -471,10 +453,8 @@ local function read_result()
     return res
 end
 
-local function apply_result(project, item, res)
-    local ok, err = import_matte(project, res)
-    if not ok then alert(err) return end
-    ok, err = build_comp(item, res)
+local function apply_result(item, res)
+    local ok, err = build_comp(item, res)
     if not ok then
         alert("Could not set up the cut-out in Fusion:\n" .. err .. "\n\nThe matte is saved here:\n" .. res.matte_dir)
         return
@@ -503,7 +483,7 @@ local function apply_last()
             .. tostring(res.matte_dir))
         return
     end
-    apply_result(project, item, res)
+    apply_result(item, res)
 end
 
 local function run()
@@ -611,7 +591,7 @@ local function run()
     log("app finished:", tostring(res.status))
     if res.status == "error" then alert("Rotoscope stopped with an error:\n" .. tostring(res.message)) end
     if res.status ~= "done" then return end
-    apply_result(project, item, res)
+    apply_result(item, res)
 end
 
 local ok, err = pcall(function()

@@ -141,6 +141,8 @@ function MOCK_ACTIVE_IS_CUTOUT()
     local src = out and out._inputs.Input
     return src ~= nil and type(src) == "table" and tostring(src.tool):find("MatteControl") ~= nil
 end
+function item:GetClipEnabled() return MOCK.clip_enabled ~= false end
+function item:GetTrackTypeAndIndex() return { "video", 1 } end
 function item:GetMediaPoolItem()
     if MOCK.no_media then return nil end
     return {
@@ -152,51 +154,44 @@ function item:GetMediaPoolItem()
     }
 end
 
-local bin_clips = {}
-local bins = {}
-local function make_folder(name)
-    return { GetName = function() return name end,
-             GetSubFolderList = function() return rlist(bins) end,
-             GetClipList = function() return rlist(bin_clips) end,
-             GetSubFolders = (not MOCK.no_old_api) and function() return bins end or nil,
-             GetClips = (not MOCK.no_old_api) and function() return bin_clips end or nil }
+-- MOCK.v2 = {name = ..., track_enabled = bool, clip_enabled = bool}: another clip on V2, over the one on V1.
+local v2item
+if MOCK.v2 then
+    v2item = {}
+    for k, f in pairs(item) do v2item[k] = f end
+    function v2item:GetName() return MOCK.v2.name end
+    function v2item:GetClipEnabled() return MOCK.v2.clip_enabled ~= false end
+    function v2item:GetTrackTypeAndIndex() return { "video", 2 } end
+    function v2item:GetMediaPoolItem()
+        return { GetClipProperty = function(_, k)
+                     local p = { ["File Path"] = "/Volumes/Media/" .. MOCK.v2.name, FPS = MOCK.clip_fps, Resolution = "3840x2160" }
+                     return p[k]
+                 end,
+                 GetName = function() return MOCK.v2.name end }
+    end
 end
-local root = make_folder("Master")
-if MOCK.bin_exists then bins[#bins + 1] = make_folder("Rotoscope") end
-local current_folder = root
-local media_pool = {
-    GetRootFolder = function() return root end,
-    AddSubFolder = function(_, parent, name) local f = make_folder(name) bins[#bins + 1] = f rec("AddSubFolder", name) return f end,
-    GetCurrentFolder = function() return current_folder end,
-    SetCurrentFolder = function(_, f) current_folder = f rec("SetCurrentFolder", f:GetName()) return true end,
-    ImportMedia = function(_, paths)
-        local p = paths[1]
-        local fp = type(p) == "table" and (p.FilePath .. " [" .. p.StartIndex .. "-" .. p.EndIndex .. "]") or p
-        rec("ImportMedia", fp, "into", current_folder:GetName())
-        local c = { GetClipProperty = function(_, k) return fp end, GetName = function() return "matte" end }
-        bin_clips[#bin_clips + 1] = c
-        return { c }
-    end,
-    DeleteClips = function(_, l) rec("DeleteClips", #l) return true end,
-}
+local function track_list(i)
+    if i == 1 then return { item } end
+    if i == 2 and v2item then return { v2item } end
+    return {}
+end
 
 local timeline = {
-    GetName = function() return "Tidslinje 1" end,
+    GetName = function() return "Timeline 1" end,
     GetSetting = function(_, k) if k == "timelineFrameRate" then return MOCK.timeline_fps end end,
     GetStartFrame = function() return 90000 end,
     GetStartTimecode = function() return "01:00:00:00" end,
     GetCurrentTimecode = function() return MOCK.playhead_tc end,
-    GetCurrentVideoItem = function() if MOCK.current_item then return item end end,
+    GetCurrentVideoItem = function() if MOCK.current_item then return (MOCK.current_v2 and v2item) or item end end,
     GetTrackCount = function() return 2 end,
-    GetIsTrackEnabled = function() return true end,
-    GetItemListInTrack = function(_, _, i) if i == 1 then return rlist({ item }) end return {} end,
-    GetItemsInTrack = (not MOCK.no_old_api) and function(_, _, i) if i == 1 then return { item } end return {} end or nil,
+    GetIsTrackEnabled = function(_, _, i) if i == 2 and MOCK.v2 then return MOCK.v2.track_enabled ~= false end return true end,
+    GetItemListInTrack = function(_, _, i) return rlist(track_list(i)) end,
+    GetItemsInTrack = (not MOCK.no_old_api) and function(_, _, i) return track_list(i) end or nil,
 }
 
 local project = {
     GetName = function() return MOCK.project end,
     GetCurrentTimeline = function() return timeline end,
-    GetMediaPool = function() return media_pool end,
     GetSetting = function() return MOCK.timeline_fps end,
 }
 
