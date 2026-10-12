@@ -1,0 +1,17 @@
+# Footage
+*.mp4
+*.MP4
+*.mov
+*.MOV
+
+# Benchmark output (overlay videos, masks, logs); keep the measurements
+benchmark/results/*
+!benchmark/results/results.jsonl
+
+# Local notes
+ROTOSCOPE_SPEC.md
+
+# Python / macOS
+__pycache__/
+*.pyc
+.DS_Store

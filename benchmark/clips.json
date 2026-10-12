@@ -1,0 +1,27 @@
+{
+  "0248": {
+    "file": "DJI_20260812190305_0248_D.MP4", "start": 0, "count": 306,
+    "about": "Person in a landscape, turns and walks a little",
+    "pos": [[930, 565], [925, 700], [1000, 690], [965, 900]], "neg": []
+  },
+  "0256": {
+    "file": "DJI_20260815170704_0256_D.MP4", "start": 0, "count": 408,
+    "about": "Person turns and walks up to the camera, ends very close",
+    "pos": [[767, 425], [750, 590], [745, 820]], "neg": []
+  },
+  "0255": {
+    "file": "DJI_20260815170443_0255_D.MP4", "start": 1500, "count": 500,
+    "about": "Person walks away from the camera and gets small (20 s)",
+    "pos": [[260, 315], [227, 430], [233, 630], [170, 640]], "neg": []
+  },
+  "0281": {
+    "file": "DJI_20260817184955_0281_D.MP4", "start": 0, "count": 199,
+    "about": "Selfie, hands and gloves moving",
+    "pos": [[1050, 300], [1053, 600], [1050, 780], [507, 1000], [1200, 1050]], "neg": []
+  },
+  "0236": {
+    "file": "DJI_20260812163211_0236_D.MP4", "start": 0, "count": 70,
+    "about": "Hiker from behind with binoculars, close",
+    "pos": [[480, 480], [600, 600], [333, 800], [453, 1040]], "neg": []
+  }
+}
