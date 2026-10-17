@@ -261,6 +261,29 @@ local function set_input(tool, id, value)
     if tool:GetInput(id) ~= value then log("could not set", id, "on", tool:GetAttrs().TOOLS_Name) end
 end
 
+-- Move a Loader so its first frame sits at comp time `frame`, keeping its trims.
+-- Fusion compensates ClipTimeStart/HoldFirstFrame when GlobalIn changes and won't let
+-- GlobalIn pass GlobalOut, so set them in the order of the shift and restore the rest.
+-- Same approach as AYON's loader_shift for Fusion.
+local function loader_shift(comp, loader, frame)
+    local T = comp.TIME_UNDEFINED
+    local function get(id) if T then return loader:GetInput(id, T) end return loader:GetInput(id) end
+    local function set(id, v) if T then loader:SetInput(id, v, T) else loader:SetInput(id, v) end end
+    local old_in, old_out = get("GlobalIn"), get("GlobalOut")
+    local shift = frame - old_in
+    if shift == 0 then return end
+    local keep = {}
+    for _, id in ipairs({ "ClipTimeStart", "ClipTimeEnd", "HoldFirstFrame", "HoldLastFrame" }) do keep[id] = get(id) end
+    if shift > 0 then
+        set("GlobalOut", old_out + shift)
+        set("GlobalIn", old_in + shift)
+    else
+        set("GlobalIn", old_in + shift)
+        set("GlobalOut", old_out + shift)
+    end
+    for id, v in pairs(keep) do if v ~= nil then set(id, v) end end
+end
+
 local function find_tool(comp, name, reg_id)
     local t = comp:FindTool(name)
     if t then return t end
@@ -359,14 +382,19 @@ local function build_into(comp, res)
             error("Fusion could not read the matte: " .. res.matte)
         end
 
-        -- The new matte loads, so replace the nodes from an earlier run.
+        loader_shift(comp, loader, start)
+        local gin, gout = loader:GetInput("GlobalIn"), loader:GetInput("GlobalOut")
+        local tin, tout = loader:GetInput("ClipTimeStart"), loader:GetInput("ClipTimeEnd")
+        log("matte loader: comp time", gin, "-", gout, "| matte frames", tin, "-", tout)
+        if gin ~= start or gout ~= start + res.frames - 1 or tin ~= 0 or tout ~= res.frames - 1 then
+            loader:Delete()
+            error(string.format("the matte could not be placed at frames %d-%d (got %s-%s, trim %s-%s)",
+                start, start + res.frames - 1, tostring(gin), tostring(gout), tostring(tin), tostring(tout)))
+        end
+
+        -- The new matte loads and sits at the right time: replace the nodes from an earlier run.
         for _, t in ipairs(old_tools) do t:Delete() end
         loader:SetAttrs({ TOOLS_Name = LOADER_NAME })
-        -- Fusion keeps the length when GlobalIn moves: start, trims, then end.
-        loader:SetInput("GlobalIn", start)
-        loader:SetInput("ClipTimeStart", 0)
-        loader:SetInput("ClipTimeEnd", res.frames - 1)
-        loader:SetInput("GlobalOut", start + res.frames - 1)
 
         local matte = comp:AddTool("MatteControl", -32768, -32768)
         matte:SetAttrs({ TOOLS_Name = MATTE_NAME })

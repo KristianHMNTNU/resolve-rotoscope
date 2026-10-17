@@ -24,7 +24,9 @@ local function make_tool(name, reg)
         ids = { { "Clip", "Filename" }, { "GlobalIn", "Global In" }, { "GlobalOut", "Global Out" },
                 { "ClipTimeStart", "Trim In" }, { "ClipTimeEnd", "Trim Out" } }
     elseif reg == "MediaIn" then
-        inputs.GlobalIn, inputs.GlobalOut, inputs.ClipTimeStart, inputs.ClipTimeEnd = 0, MOCK.duration - 1, MOCK.src_start, MOCK.src_start + MOCK.duration - 1
+        -- As in Resolve 19.1: comp time = frame number in the source file.
+        local last = MOCK.src_start + MOCK.duration - 1
+        inputs.GlobalIn, inputs.GlobalOut, inputs.ClipTimeStart, inputs.ClipTimeEnd = 0, last, 0, last
     end
     local tool = { _inputs = inputs, _name = name, _reg = reg, Output = { tool = name } }
     function tool:GetInputList()
@@ -34,7 +36,20 @@ local function make_tool(name, reg)
         end
         return l
     end
-    function tool:SetInput(id, v) rec("SetInput", self._name, id, tostring(v)) inputs[id] = v end
+    function tool:SetInput(id, v)
+        rec("SetInput", self._name, id, tostring(v))
+        if self._reg == "Loader" and self._length then
+            local len = self._length
+            if id == "GlobalIn" then
+                if v > inputs.GlobalOut then return end
+                inputs.ClipTimeStart = math.max(0, math.min(len - 1, inputs.ClipTimeStart + (v - inputs.GlobalIn)))
+            elseif id == "GlobalOut" then
+                if v < inputs.GlobalIn then return end
+                inputs.ClipTimeEnd = math.max(0, math.min(len - 1, inputs.ClipTimeEnd + (v - inputs.GlobalOut)))
+            end
+        end
+        inputs[id] = v
+    end
     function tool:GetInput(id) return inputs[id] end
     function tool:SetAttrs(a) if a.TOOLS_Name then self._name = a.TOOLS_Name end end
     function tool:GetAttrs()
@@ -47,14 +62,18 @@ local function make_tool(name, reg)
         rec("assign", t._name .. "." .. k, type(v) == "table" and ("<- " .. tostring(v.tool)) or tostring(v))
         inputs[k] = v
         if k == "Clip" and t._reg == "Loader" and not (t._comp and t._comp._locked) and not MOCK.loader_fails then
-            rawset(t, "_length", MOCK.matte_frames or 132)
+            local len = MOCK.matte_frames or MOCK.duration
+            rawset(t, "_length", len)
+            -- A freshly loaded clip sits at comp time 0 with no trim, like in Resolve.
+            inputs.GlobalIn, inputs.GlobalOut, inputs.ClipTimeStart, inputs.ClipTimeEnd = 0, len - 1, 0, len - 1
+            inputs.HoldFirstFrame, inputs.HoldLastFrame = 0, 0
         end
     end })
 end
 
 local function make_comp(with_our_tools)
     local tools = { MediaIn1 = make_tool("MediaIn1", "MediaIn"), MediaOut1 = make_tool("MediaOut1", "MediaOut") }
-    local comp = { _locked = false }
+    local comp = { _locked = false, TIME_UNDEFINED = -2000000000 }
     local n = 0
     local function own(key, t) rawset(t, "_owner", tools) rawset(t, "_key", key) rawset(t, "_comp", comp) tools[key] = t end
     own("MediaIn1", tools.MediaIn1)
@@ -68,7 +87,9 @@ local function make_comp(with_our_tools)
         local l = make_tool("RotoscopeMatte", "Loader") own("old_loader", l)
         local m = make_tool("RotoscopeCutout", "MatteControl") own("old_matte", m)
     end
-    function comp:GetAttrs() return { COMPN_RenderStart = 0, COMPN_RenderEnd = MOCK.duration - 1 } end
+    function comp:GetAttrs()
+        return { COMPN_RenderStart = MOCK.src_start, COMPN_RenderEnd = MOCK.src_start + MOCK.duration - 1 }
+    end
     MOCK_TOOLS = tools
     return comp
 end
@@ -135,6 +156,15 @@ function item:LoadFusionCompByName(n)
     return last and last.comp
 end
 function item:ExportFusionComp() return true end
+function MOCK_LOADER()
+    local t = active and active.comp:FindTool("RotoscopeMatte")
+    if not t then for _, x in ipairs(active and active.comp:GetToolList() or {}) do
+        if x._name == "RotoscopeMatte" then t = x end end end
+    if not t then return nil end
+    local i = t._inputs
+    return { i.GlobalIn, i.GlobalOut, i.ClipTimeStart, i.ClipTimeEnd }
+end
+
 -- The composition the timeline actually renders, and whether its MediaOut gets the cut-out.
 function MOCK_ACTIVE_IS_CUTOUT()
     local out = active and active.comp:FindTool("MediaOut1")

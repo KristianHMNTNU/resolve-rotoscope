@@ -60,6 +60,8 @@ def run(name, app_result=None, mode=None, **overrides):
     lua.execute(open(SCRIPT).read())
     calls = list(g.MOCK_CALLS.values())
     state["active_is_cutout"] = bool(g.MOCK_ACTIVE_IS_CUTOUT())
+    loader = g.MOCK_LOADER()
+    state["loader"] = list(loader.values()) if loader else None
     print(f"\n=== {name}: app opened {state['opened']}x, alerts {len(state['alerts'])}")
     for a in state["alerts"]:
         print("   alert:", a[a.find("message"):][:160])
@@ -81,14 +83,13 @@ def done(job):
 
 if __name__ == "__main__":
     s, c = run("normal", done)
-    assert s["active_is_cutout"]
+    assert s["active_is_cutout"] and s["loader"] == [1500, 1999, 0, 499], s["loader"]
     assert s["job"]["start_frame"] == 1500 and s["job"]["end_frame"] == 1999
     assert not any("ImportMedia" in x for x in c), "the media pool is not touched"
     assert any("RotoscopeCutout.Background <- MediaIn1" in x for x in c)
     assert any("RotoscopeCutout.Foreground <- Loader" in x for x in c)
     assert any("MediaOut1.Input <- MatteControl" in x for x in c)
     assert any("MatteCombine 1" in x for x in c) and any("CombineOp 0" in x for x in c)
-    assert any("GlobalOut 499" in x for x in c)
 
     s, c = run("Resolve() is nil, global resolve exists (free version)", done, like_free_menu_script=True)
     assert s["opened"] == 1 and s["active_is_cutout"]
@@ -96,6 +97,10 @@ if __name__ == "__main__":
     s, c = run("lists with __flags and {name = index} shapes", done, weird_lists=True,
                like_free_menu_script=True)
     assert any("MediaOut1.Input <- MatteControl" in x for x in c)
+
+    s, c = run("clip that starts later in the file: matte placed at its source frames", done,
+               src_start=176, src_span=68, duration=69, left_offset=176, playhead_tc="01:00:04:10")
+    assert s["active_is_cutout"] and s["loader"] == [176, 244, 0, 68], s["loader"]
 
     s, c = run("trimmed clip: GetSourceStartFrame one frame early", done,
                src_start=131, src_span=363, duration=363, left_offset=132)
@@ -125,7 +130,7 @@ if __name__ == "__main__":
     assert not any("AddFusionComp" in x for x in c) and any("MediaOut1.Input <- MatteControl" in x for x in c)
 
     s, c = run("leftover composition with our nodes is removed", done, mode="apply_last",
-               leftover_comp=True, src_start=0, src_span=131, duration=132)
+               leftover_comp=True)
     assert any("DeleteComp Composition 2 true" in x for x in c), c
     assert any("MediaOut1.Input <- MatteControl" in x for x in c) and not any("AddFusionComp" in x for x in c)
 
@@ -135,7 +140,7 @@ if __name__ == "__main__":
     assert any("DeleteTool Loader" in x for x in c)
 
     s, c = run("two compositions with the same name", None, mode="apply_last",
-               duplicate_names=True, src_start=0, src_span=131, duration=132)
+               duplicate_names=True)
     assert s["active_is_cutout"], "the composition the timeline renders must get the cut-out"
 
     s, c = run("two stacked clips: the top one is used", done, v2={"name": "TOP.MP4"})
